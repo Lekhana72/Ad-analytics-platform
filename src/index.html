@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Ad Performance Dashboard</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        input, button { margin: 5px; padding: 5px; }
+        table { border-collapse: collapse; width: 100%; margin-top: 20px; }
+        th, td { border: 1px solid #ccc; padding: 8px; text-align: center; }
+        th { background-color: #f0f0f0; }
+        button.click, button.impression { cursor: pointer; }
+        canvas { margin-top: 20px; }
+    </style>
+</head>
+<body>
+    <!-- login -->
+    <div id="loginForm">
+        <h2>Login</h2>
+        <input type="text" id="username" placeholder="Username">
+        <input type="password" id="password" placeholder="Password">
+        <button onclick="login()">Login</button>
+        <p id="loginMsg"></p>
+    </div>
+
+    <h1>Ad Performance Dashboard</h1>
+
+    <div id="dashboard" style="display:none;">
+        <h2>Add New Ad</h2>
+        <input type="text" id="adName" placeholder="Ad Name">
+        <input type="text" id="adType" placeholder="Ad Type">
+        <button onclick="addAd()">Add Ad</button>
+
+        <h2>Filter & Sort Ads</h2>
+        <select id="filterType" onchange="fetchAds()">
+            <option value="">All Types</option>
+            <option value="Banner">Banner</option>
+            <option value="Video">Video</option>
+        </select>
+
+        <select id="sortBy" onchange="fetchAds()">
+            <option value="">Sort By</option>
+            <option value="impressions">Impressions</option>
+            <option value="clicks">Clicks</option>
+            <option value="CTR">CTR</option>
+        </select>
+
+        <button onclick="exportCSV()">Export Analytics as CSV</button>
+
+        <h2>Ads List</h2>
+        <table id="adsTable">
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>Name</th>
+                    <th>Type</th>
+                    <th>Impressions</th>
+                    <th>Clicks</th>
+                    <th>CTR (%)</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody></tbody>
+        </table>
+
+        <h2>Analytics Chart</h2>
+        <canvas id="analyticsChart" width="800" height="400"></canvas>
+    </div>
+
+    <script>
+        const apiBase = "http://localhost:5000/api";
+        let analyticsChart;
+        let token = "";
+        let userRole = "";
+
+        async function login() {
+            const username = document.getElementById("username").value;
+            const password = document.getElementById("password").value;
+
+            try {
+                const res = await fetch(`${apiBase}/login`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ username, password })
+                });
+                const data = await res.json();
+
+                if (data.token) {
+                    token = data.token;
+                    userRole = data.role;
+                    document.getElementById("loginMsg").innerText = `Logged in as ${data.username} (${data.role})`;
+
+                    document.getElementById("dashboard").style.display = "block";
+                    document.getElementById("loginForm").style.display = "none";
+
+                    fetchAds(); // fetch ads after login
+                } else {
+                    document.getElementById("loginMsg").innerText = data.error;
+                }
+            } catch (err) {
+                document.getElementById("loginMsg").innerText = "Login failed: " + err.message;
+            }
+        }
+
+        async function fetchAds() {
+            if (!token) return; // prevent fetching if not logged in
+
+            const filterType = document.getElementById("filterType").value;
+            const sortBy = document.getElementById("sortBy").value;
+
+            let url = `${apiBase}/analytics`;
+            const params = [];
+            if (filterType) params.push(`type=${filterType}`);
+            if (sortBy) params.push(`sort=${sortBy}`);
+            if (params.length) url += "?" + params.join("&");
+
+            const res = await fetch(url, { headers: { "Authorization": "Bearer " + token } });
+            const ads = await res.json();
+
+            // update table
+            const tbody = document.querySelector("#adsTable tbody");
+            tbody.innerHTML = "";
+            ads.forEach(ad => {
+                const tr = document.createElement("tr");
+                tr.innerHTML = `
+                    <td>${ad.id}</td>
+                    <td>${ad.name}</td>
+                    <td>${ad.type}</td>
+                    <td>${ad.impressions}</td>
+                    <td>${ad.clicks}</td>
+                    <td>${ad.CTR}</td>
+                    <td>
+                        <button class="impression" onclick="trackImpression(${ad.id})">Impression</button>
+                        <button class="click" onclick="trackClick(${ad.id})">Click</button>
+                    </td>
+                `;
+                tbody.appendChild(tr);
+            });
+
+            // update chart
+            const labels = ads.map(ad => ad.name);
+            const impressions = ads.map(ad => ad.impressions);
+            const clicks = ads.map(ad => ad.clicks);
+            const ctr = ads.map(ad => ad.CTR);
+
+            const data = {
+                labels,
+                datasets: [
+                    { label: 'Impressions', data: impressions, backgroundColor: 'rgba(54, 162, 235, 0.5)', borderColor: 'rgba(54, 162, 235, 1)', borderWidth: 1 },
+                    { label: 'Clicks', data: clicks, backgroundColor: 'rgba(255, 99, 132, 0.5)', borderColor: 'rgba(255, 99, 132, 1)', borderWidth: 1 },
+                    { label: 'CTR (%)', data: ctr, type: 'line', borderColor: 'rgba(255, 206, 86, 1)', backgroundColor: 'rgba(255, 206, 86, 0.2)', yAxisID: 'y1' }
+                ]
+            };
+
+            const config = {
+                type: 'bar',
+                data,
+                options: {
+                    responsive: true,
+                    interaction: { mode: 'index', intersect: false },
+                    stacked: false,
+                    scales: {
+                        y: { beginAtZero: true, title: { display: true, text: 'Count' } },
+                        y1: { beginAtZero: true, position: 'right', title: { display: true, text: 'CTR (%)' } }
+                    }
+                }
+            };
+
+            if (analyticsChart) analyticsChart.destroy();
+            const ctx = document.getElementById('analyticsChart').getContext('2d');
+            analyticsChart = new Chart(ctx, config);
+        }
+
+        async function addAd() {
+            if (userRole !== 'admin') return alert("Only admins can add ads");
+
+            const name = document.getElementById("adName").value;
+            const type = document.getElementById("adType").value;
+            if (!name) return alert("Enter Ad Name");
+
+            await fetch(`${apiBase}/ads`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json", "Authorization": "Bearer " + token },
+                body: JSON.stringify({ name, type })
+            });
+
+            document.getElementById("adName").value = "";
+            document.getElementById("adType").value = "";
+            fetchAds();
+        }
+
+        async function trackImpression(id) {
+            await fetch(`${apiBase}/ads/${id}/impression`, { method: "POST", headers: { "Authorization": "Bearer " + token } });
+            fetchAds();
+        }
+
+        async function trackClick(id) {
+            await fetch(`${apiBase}/ads/${id}/click`, { method: "POST", headers: { "Authorization": "Bearer " + token } });
+            fetchAds();
+        }
+
+        async function exportCSV() {
+            const filterType = document.getElementById("filterType").value;
+            const sortBy = document.getElementById("sortBy").value;
+
+            let url = `${apiBase}/analytics`;
+            const params = [];
+            if (filterType) params.push(`type=${filterType}`);
+            if (sortBy) params.push(`sort=${sortBy}`);
+            if (params.length) url += "?" + params.join("&");
+
+            const res = await fetch(url, { headers: { "Authorization": "Bearer " + token } });
+            const ads = await res.json();
+
+            let csv = "ID,Name,Type,Impressions,Clicks,CTR (%)\n";
+            ads.forEach(ad => csv += `${ad.id},${ad.name},${ad.type},${ad.impressions},${ad.clicks},${ad.CTR}\n`);
+
+            const blob = new Blob([csv], { type: 'text/csv' });
+            const link = document.createElement('a');
+            link.href = URL.createObjectURL(blob);
+            link.download = 'ad_analytics.csv';
+            link.click();
+            URL.revokeObjectURL(link.href);
+        }
+    </script>
+</body>
+
+</html>
